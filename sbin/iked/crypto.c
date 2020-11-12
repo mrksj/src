@@ -691,6 +691,7 @@ dsa_setkey(struct iked_dsa *dsa, void *key, size_t keylen, uint8_t type)
 	RSA		*rsa = NULL;
 	EC_KEY		*ec = NULL;
 	EVP_PKEY	*pkey = NULL;
+    int i;
 
 	ibuf_release(dsa->dsa_keydata);
 	if ((dsa->dsa_keydata = ibuf_new(key, keylen)) == NULL) {
@@ -745,6 +746,13 @@ dsa_setkey(struct iked_dsa *dsa, void *key, size_t keylen, uint8_t type)
 		EC_KEY_free(ec);	/* pkey now has the reference */
 		dsa->dsa_key = pkey;
 		break;
+    case IKEV2_CERT_SISIG:
+        for (i = 0; i < keylen; i++){
+            printf("%02x", ((uint8_t*) key)[i]);
+        }
+        printf("\n");
+        dsa->dsa_key = key;
+        break;
 	default:
 		if (dsa->dsa_hmac)
 			break;

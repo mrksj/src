@@ -39,7 +39,7 @@
 #define IKED_CERT_DIR		"certs/"
 #define IKED_PUBKEY_DIR		"pubkeys/"
 #define IKED_PRIVKEY		IKED_CA "private/local.key"
-#define IKED_PUBKEY		"local.pub"
+#define IKED_PUBKEY		IKED_CA "local.pub"
 
 #define IKED_OCSP_RESPCERT	"ocsp/responder.crt"
 

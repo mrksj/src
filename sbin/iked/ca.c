@@ -528,9 +528,11 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 	ptr += i;
 	len -= i;
 
+    log_debug("%s: type: %d", __func__, type);
 	switch (type) {
 	case IKEV2_CERT_RSA_KEY:
 	case IKEV2_CERT_ECDSA:
+    case IKEV2_CERT_SISIG:
 		/*
 		 * Find a local raw public key that matches the type
 		 * received in the CERTREQ payoad
@@ -1216,6 +1218,9 @@ ca_privkey_to_method(struct iked_id *privkey)
 			method = IKEV2_AUTH_ECDSA_521;
 			break;
 		}
+    case IKEV2_CERT_SISIG:
+        method = IKEV2_AUTH_SIG;
+        break;
 	}
 
 	log_debug("%s: type %s method %s", __func__,

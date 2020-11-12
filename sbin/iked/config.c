@@ -961,6 +961,115 @@ config_getcertpartialchain(struct iked *env, struct imsg *imsg)
 	return (0);
 }
 
+// Ugly way to read in isogeny-based private key/public key
+static int
+try_isogeny(struct iked_id *privkey, struct iked_id *pubkey)
+{
+    FILE *priv_fp, *pub_fp; //also read public key
+    int i, j;
+    char *line = NULL, *ptr;
+    size_t n = 0;
+    ssize_t read;
+    i = 0;
+    int priv_len = 48;  // XXX maybe do not hardcode
+    int pub_len = 4 * 2 * 96; // maybe do not hardcode
+    unsigned char *private_key = calloc (1, priv_len);
+    unsigned char *public_key = calloc (1, pub_len); 
+
+    if ((priv_fp=fopen(IKED_PRIVKEY, "r")) == NULL){
+        perror("failed to open private key");
+    }
+    while ((read = getline(&line, &n, priv_fp)) != -1){
+        log_debug("%s: read line: %s", __func__, line);
+        switch (i){
+            case 0:
+                if (strncmp(line, "-----BEGIN SISIG PRIVATE KEY-----", 33) != 0){
+                    perror("invalid private.key format");
+                    return -1;
+                }
+                break;
+            case 1:
+                if (read != 2 * priv_len + 1){
+                    perror("private key too short");
+                    return -1;
+                }
+                ptr = line;
+                for (j = 0; j < priv_len; j++){
+                    sscanf(ptr, "%2hhx", &private_key[j]);
+                    ptr += 2;
+                }
+                break;
+            case 2:
+                if (strncmp(line, "-----END SISIG PRIVATE KEY-----", 31) != 0){
+                    perror("invalid private key format");
+                    return -1;
+                }
+                break;
+            default:
+                perror("why do we read more than 3 lines?");
+                return -1;
+                break;
+        }
+        i += 1;
+    }
+    fclose(priv_fp);
+    
+    if ((pub_fp=fopen(IKED_PUBKEY, "r")) == NULL){
+        perror("failed to open public.key");
+    }
+    i = 0;
+    line = NULL;
+    n = 0;
+    while ((read = getline(&line, &n, pub_fp)) != -1){
+       log_debug("%s: read line: %s", __func__, line);
+       switch (i){
+            case 0:
+                if (strncmp(line, "-----BEGIN SISIG PUBLIC KEY-----", 32) != 0){
+                    perror("invalid public.key format");
+                    return -1;
+                }
+                break;
+            case 1:
+                if (read != 2 * pub_len + 1){
+                    perror("public key too short");
+                    return -1;
+                }
+                ptr = line;
+                for (j = 0; j < pub_len; j++){
+                    sscanf(ptr, "%2hhx", &public_key[j]);
+                    ptr += 2;
+                }
+                break;
+            case 2:
+                if (strncmp(line, "-----END SISIG PUBLIC KEY-----", 30) != 0){
+                    perror("invalid public.key format");
+                    return -1;
+                }
+                break;
+            default:
+                perror("why do we read more than 3 lines?");
+                return -1;
+                break;
+        }
+        i += 1;
+    }
+    fclose(pub_fp);
+    free(line);
+
+    privkey->id_type = 0;
+    privkey->id_offset = 0;
+    if ((privkey->id_buf = ibuf_new(private_key, priv_len)) == NULL)
+        return -1;
+    privkey->id_type = IKEV2_CERT_SISIG;
+
+    pubkey->id_type = 0;
+    pubkey->id_offset = 0;
+    if ((pubkey->id_buf = ibuf_new(public_key, pub_len)) == NULL)
+        return -1;
+    pubkey->id_type = IKEV2_CERT_SISIG;
+
+    return 0;
+}
 int
 config_setkeys(struct iked *env)
 {
@@ -980,19 +1089,26 @@ config_setkeys(struct iked *env)
 		goto done;
 	}
 
-	if ((key = PEM_read_PrivateKey(fp, NULL, NULL, NULL)) == NULL) {
-		log_warnx("%s: failed to read private key", __func__);
-		goto done;
+	if ((key = PEM_read_PrivateKey(fp, NULL, NULL, NULL)) != NULL) {
+        log_debug("%s: found RSA or EC key", __func__);
+	    if (ca_privkey_serialize(key, &privkey) != 0) {
+	    	log_warnx("%s: failed to serialize private key", __func__);
+	    	goto done;
+	    }
+	    if (ca_pubkey_serialize(key, &pubkey) != 0) {
+	    	log_warnx("%s: failed to serialize public key", __func__);
+	    	goto done;
+	    }
 	}
+    else {
+		log_warnx("%s: no RSA or EC key", __func__);
+        fclose(fp);
+		if (try_isogeny(&privkey, &pubkey) != 0) {
+            log_debug("%s: returned from try_isogeny with error", __func__);
+            goto done;
+        }
+    }
 
-	if (ca_privkey_serialize(key, &privkey) != 0) {
-		log_warnx("%s: failed to serialize private key", __func__);
-		goto done;
-	}
-	if (ca_pubkey_serialize(key, &pubkey) != 0) {
-		log_warnx("%s: failed to serialize public key", __func__);
-		goto done;
-	}
 
 	iov[0].iov_base = &privkey;
 	iov[0].iov_len = sizeof(privkey);

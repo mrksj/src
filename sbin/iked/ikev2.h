@@ -432,6 +432,7 @@ struct ikev2_cert {
  * use range (201-255, same RFC) for ECDSA.
  */
 #define IKEV2_CERT_ECDSA		201	/* Private */
+#define IKEV2_CERT_SISIG       202 /* Private */
 
 extern struct iked_constmap ikev2_cert_map[];
 

@@ -1055,6 +1055,12 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
 		log_debug("%s: invalid auth method", __func__);
 		return (-1);
 	}
+    log_debug("%s: dsa->dsa_method: %d", __func__, dsa->dsa_method);
+    log_debug("%s: dsa->dsa_priv: %p", __func__, dsa->dsa_priv);
+    log_debug("%s: dsa->dsa_keydata: %p", __func__, dsa->dsa_keydata);
+    log_debug("%s: dsa->dsa_key: %p", __func__, dsa->dsa_key);
+    log_debug("%s: dsa->dsa_sign: %d", __func__, dsa->dsa_sign);
+
 
 	switch (auth->auth_method) {
 	case IKEV2_AUTH_SHARED_KEY_MIC:
@@ -1081,12 +1087,23 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
 		break;
 	}
 
-	if (dsa_setkey(dsa, key, keylen, keytype) == NULL ||
-	    dsa_init(dsa, NULL, 0) != 0 ||
-	    dsa_update(dsa, ibuf_data(authmsg), ibuf_size(authmsg))) {
-		log_debug("%s: failed to compute digital signature", __func__);
-		goto done;
-	}
+    log_debug("%s: keylen: %zd", __func__, keylen);
+    log_debug("%s: keytype: %d", __func__, keytype);
+    // XXX: see how to sign differently if keytype is IKEV2_CERT_SISIG
+    if (keytype == IKEV2_CERT_SISIG){
+        //use dedicated algorithms
+        if(dsa_setkey(dsa, key, keylen, keytype) == NULL)
+            log_debug("%s: failed at dsa_setkey within SISIG", __func__);
+            
+    } else {
+
+	    if (dsa_setkey(dsa, key, keylen, keytype) == NULL ||
+	        dsa_init(dsa, NULL, 0) != 0 ||
+	        dsa_update(dsa, ibuf_data(authmsg), ibuf_size(authmsg))) {
+	    	log_debug("%s: failed to compute digital signature", __func__);
+	    	goto done;
+	    }
+    }
 
 	ibuf_release(sa->sa_localauth.id_buf);
 	sa->sa_localauth.id_buf = NULL;
