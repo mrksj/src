@@ -11,12 +11,15 @@ MAN=		iked.conf.5 iked.8
 #NOMAN=		yes
 
 LDADD=		-lutil -levent -lcrypto
+LDADD+=		-L${.CURDIR}/libsisig -lsisig -lpthread
 DPADD=		${LIBUTIL} ${LIBEVENT} ${LIBCRYPTO}
+CFLAGS+= 	-I${.CURDIR}/libsisig/include
 CFLAGS+=	-Wall -I${.CURDIR}
 CFLAGS+=	-Wstrict-prototypes -Wmissing-prototypes
 CFLAGS+=	-Wmissing-declarations
 CFLAGS+=	-Wshadow -Wpointer-arith -Wcast-qual
 CFLAGS+=	-Wsign-compare
+CFLAGS+=  	-DSISIG
 CLEANFILES+=	ikev2_map.c eap_map.c
 GENERATED=	ikev2_map.c eap_map.c
 

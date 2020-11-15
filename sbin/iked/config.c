@@ -36,6 +36,10 @@
 #include "iked.h"
 #include "ikev2.h"
 
+#ifdef SISIG
+#include <SISig.h>
+#endif
+
 struct iked_sa *
 config_new_sa(struct iked *env, int initiator)
 {
@@ -965,106 +969,21 @@ config_getcertpartialchain(struct iked *env, struct imsg *imsg)
 static int
 try_isogeny(struct iked_id *privkey, struct iked_id *pubkey)
 {
-    FILE *priv_fp, *pub_fp; //also read public key
-    int i, j;
-    char *line = NULL, *ptr;
-    size_t n = 0;
-    ssize_t read;
-    i = 0;
-    int priv_len = 48;  // XXX maybe do not hardcode
-    int pub_len = 4 * 2 * 96; // maybe do not hardcode
-    unsigned char *private_key = calloc (1, priv_len);
-    unsigned char *public_key = calloc (1, pub_len); 
+    unsigned char *private_key = calloc (1, PRIV_KEY_LEN);
+    unsigned char *public_key = calloc (1, PUB_KEY_LEN); 
 
-    if ((priv_fp=fopen(IKED_PRIVKEY, "r")) == NULL){
-        perror("failed to open private key");
-    }
-    while ((read = getline(&line, &n, priv_fp)) != -1){
-        log_debug("%s: read line: %s", __func__, line);
-        switch (i){
-            case 0:
-                if (strncmp(line, "-----BEGIN SISIG PRIVATE KEY-----", 33) != 0){
-                    perror("invalid private.key format");
-                    return -1;
-                }
-                break;
-            case 1:
-                if (read != 2 * priv_len + 1){
-                    perror("private key too short");
-                    return -1;
-                }
-                ptr = line;
-                for (j = 0; j < priv_len; j++){
-                    sscanf(ptr, "%2hhx", &private_key[j]);
-                    ptr += 2;
-                }
-                break;
-            case 2:
-                if (strncmp(line, "-----END SISIG PRIVATE KEY-----", 31) != 0){
-                    perror("invalid private key format");
-                    return -1;
-                }
-                break;
-            default:
-                perror("why do we read more than 3 lines?");
-                return -1;
-                break;
-        }
-        i += 1;
-    }
-    fclose(priv_fp);
-    
-    if ((pub_fp=fopen(IKED_PUBKEY, "r")) == NULL){
-        perror("failed to open public.key");
-    }
-    i = 0;
-    line = NULL;
-    n = 0;
-    while ((read = getline(&line, &n, pub_fp)) != -1){
-       log_debug("%s: read line: %s", __func__, line);
-       switch (i){
-            case 0:
-                if (strncmp(line, "-----BEGIN SISIG PUBLIC KEY-----", 32) != 0){
-                    perror("invalid public.key format");
-                    return -1;
-                }
-                break;
-            case 1:
-                if (read != 2 * pub_len + 1){
-                    perror("public key too short");
-                    return -1;
-                }
-                ptr = line;
-                for (j = 0; j < pub_len; j++){
-                    sscanf(ptr, "%2hhx", &public_key[j]);
-                    ptr += 2;
-                }
-                break;
-            case 2:
-                if (strncmp(line, "-----END SISIG PUBLIC KEY-----", 30) != 0){
-                    perror("invalid public.key format");
-                    return -1;
-                }
-                break;
-            default:
-                perror("why do we read more than 3 lines?");
-                return -1;
-                break;
-        }
-        i += 1;
-    }
-    fclose(pub_fp);
-    free(line);
+    private_key = SISig_P751_Read_Privkey(IKED_PRIVKEY);
+    public_key = SISig_P751_Read_Pubkey(IKED_PUBKEY);
 
     privkey->id_type = 0;
     privkey->id_offset = 0;
-    if ((privkey->id_buf = ibuf_new(private_key, priv_len)) == NULL)
+    if ((privkey->id_buf = ibuf_new(private_key, PRIV_KEY_LEN)) == NULL)
         return -1;
     privkey->id_type = IKEV2_CERT_SISIG;
 
     pubkey->id_type = 0;
     pubkey->id_offset = 0;
-    if ((pubkey->id_buf = ibuf_new(public_key, pub_len)) == NULL)
+    if ((pubkey->id_buf = ibuf_new(public_key, PUB_KEY_LEN)) == NULL)
         return -1;
     pubkey->id_type = IKEV2_CERT_SISIG;
 
@@ -1101,12 +1020,16 @@ config_setkeys(struct iked *env)
 	    }
 	}
     else {
-		log_warnx("%s: no RSA or EC key", __func__);
+#ifdef SISIG
+		log_debug("%s: no RSA or EC key", __func__);
         fclose(fp);
 		if (try_isogeny(&privkey, &pubkey) != 0) {
             log_debug("%s: returned from try_isogeny with error", __func__);
             goto done;
         }
+#else
+        log_debug("%s: no RSA or EC key, aborting", __func__);
+#endif
     }
 
 

@@ -37,6 +37,11 @@
 
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/x509.h>
+
+#ifdef SISIG
+#include <SISig.h>
+#endif
 
 #include "iked.h"
 #include "ikev2.h"
@@ -51,6 +56,20 @@ int	 ikev2_send_encrypted_fragments(struct iked *env, struct iked_sa *sa,
 	    struct ibuf *in,uint8_t exchange, uint8_t firstpayload, int response);
 int	 ikev2_msg_encrypt_prepare(struct iked_sa *, struct ikev2_payload *,
 	    struct ibuf*, struct ibuf *, struct ike_header *, uint8_t, int);
+
+// XXX no good practice
+struct ca_store {
+	X509_STORE	*ca_cas;
+	X509_LOOKUP	*ca_calookup;
+
+	X509_STORE	*ca_certs;
+	X509_LOOKUP	*ca_certlookup;
+
+	struct iked_id	 ca_privkey;
+	struct iked_id	 ca_pubkey;
+
+	uint8_t		 ca_privkey_method;
+};
 
 void
 ikev2_msg_cb(int fd, short event, void *arg)
@@ -1089,13 +1108,8 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
 
     log_debug("%s: keylen: %zd", __func__, keylen);
     log_debug("%s: keytype: %d", __func__, keytype);
-    // XXX: see how to sign differently if keytype is IKEV2_CERT_SISIG
-    if (keytype == IKEV2_CERT_SISIG){
-        //use dedicated algorithms
-        if(dsa_setkey(dsa, key, keylen, keytype) == NULL)
-            log_debug("%s: failed at dsa_setkey within SISIG", __func__);
-            
-    } else {
+    
+    if (keytype != IKEV2_CERT_SISIG){
 
 	    if (dsa_setkey(dsa, key, keylen, keytype) == NULL ||
 	        dsa_init(dsa, NULL, 0) != 0 ||
@@ -1108,24 +1122,45 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
 	ibuf_release(sa->sa_localauth.id_buf);
 	sa->sa_localauth.id_buf = NULL;
 
-	if ((buf = ibuf_new(NULL, dsa_length(dsa))) == NULL) {
-		log_debug("%s: failed to get auth buffer", __func__);
-		goto done;
-	}
+    if (keytype != IKEV2_CERT_SISIG){
+        if ((buf = ibuf_new(NULL, dsa_length(dsa))) == NULL) {
+            log_debug("%s: failed to get auth buffer", __func__);
+            goto done;
+        }
 
-	if ((siglen = dsa_sign_final(dsa,
-	    ibuf_data(buf), ibuf_size(buf))) < 0) {
-		log_debug("%s: failed to create auth signature", __func__);
-		ibuf_release(buf);
-		goto done;
-	}
+        if ((siglen = dsa_sign_final(dsa,
+                        ibuf_data(buf), ibuf_size(buf))) < 0) {
+            log_debug("%s: failed to create auth signature", __func__);
+            ibuf_release(buf);
+            goto done;
+        }
 
-	if (ibuf_setsize(buf, siglen) < 0) {
-		log_debug("%s: failed to set auth signature size to %zd",
-		    __func__, siglen);
-		ibuf_release(buf);
-		goto done;
-	}
+        if (ibuf_setsize(buf, siglen) < 0) {
+            log_debug("%s: failed to set auth signature size to %zd",
+                    __func__, siglen);
+            ibuf_release(buf);
+            goto done;
+        }
+    } else {
+        log_debug("%s: SISIG signature generation %d", __func__, SHA_DIGEST_LENGTH);
+        struct SigData *sigdata = calloc(1, sizeof(sigdata));
+        unsigned char *md = calloc(1, SHA256_DIGEST_LENGTH);
+        struct ca_store *store = env->sc_priv;
+        struct iked_id *pub_id = &store->ca_pubkey;
+        
+        SHA256(ibuf_data(authmsg), ibuf_size(authmsg), md);
+        print_hex(md, 0, SHA_DIGEST_LENGTH);
+
+        print_hex(ibuf_data(pub_id->id_buf), 0, ibuf_size(pub_id->id_buf));
+
+        sigdata = SISig_P751_Sign(md, key, ibuf_data(pub_id->id_buf));
+        log_debug("%s: got out of SISig_P751_Sign", __func__);
+        print_hex(sigdata->sig, 0, sigdata->siglen);
+        buf = ibuf_new(sigdata->sig, sigdata->siglen);
+        print_hex(ibuf_data(buf), 0, ibuf_size(buf));
+        log_debug("%s: end of SISIG generation", __func__);
+    }
+
 
 	sa->sa_localauth.id_type = auth->auth_method;
 	sa->sa_localauth.id_buf = buf;

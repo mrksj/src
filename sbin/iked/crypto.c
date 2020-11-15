@@ -751,7 +751,7 @@ dsa_setkey(struct iked_dsa *dsa, void *key, size_t keylen, uint8_t type)
             printf("%02x", ((uint8_t*) key)[i]);
         }
         printf("\n");
-        dsa->dsa_key = key;
+        dsa->dsa_key = ibuf_new(key, keylen);
         break;
 	default:
 		if (dsa->dsa_hmac)
