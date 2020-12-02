@@ -972,8 +972,14 @@ try_isogeny(struct iked_id *privkey, struct iked_id *pubkey)
     unsigned char *private_key = calloc (1, PRIV_KEY_LEN);
     unsigned char *public_key = calloc (1, PUB_KEY_LEN); 
 
-    private_key = SISig_P751_Read_Privkey(IKED_PRIVKEY);
-    public_key = SISig_P751_Read_Pubkey(IKED_PUBKEY);
+    if ((private_key = SISig_P751_Read_Privkey(IKED_PRIVKEY)) ==NULL){
+        log_debug("%s: failed reading private key", __func__);
+        return -1;
+    }
+    if ((public_key = SISig_P751_Read_Pubkey(IKED_PUBKEY)) == NULL){
+        log_debug("%s: failed reading private key", __func__);
+        return -1;
+    }
 
     privkey->id_type = 0;
     privkey->id_offset = 0;

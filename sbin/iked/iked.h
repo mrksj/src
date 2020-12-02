@@ -61,6 +61,13 @@ struct imsgev {
 	const char		*name;
 };
 
+/* for sending big data in more than one imsg*/
+struct imsg_truncated {
+    uint16_t curr_no;
+    uint16_t total;
+    uint8_t *data;
+};
+
 #define IMSG_SIZE_CHECK(imsg, p) do {				\
 	if (IMSG_DATA_SIZE(imsg) < sizeof(*p))			\
 		fatalx("bad length imsg received");		\

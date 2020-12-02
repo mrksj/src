@@ -1074,12 +1074,6 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
 		log_debug("%s: invalid auth method", __func__);
 		return (-1);
 	}
-    log_debug("%s: dsa->dsa_method: %d", __func__, dsa->dsa_method);
-    log_debug("%s: dsa->dsa_priv: %p", __func__, dsa->dsa_priv);
-    log_debug("%s: dsa->dsa_keydata: %p", __func__, dsa->dsa_keydata);
-    log_debug("%s: dsa->dsa_key: %p", __func__, dsa->dsa_key);
-    log_debug("%s: dsa->dsa_sign: %d", __func__, dsa->dsa_sign);
-
 
 	switch (auth->auth_method) {
 	case IKEV2_AUTH_SHARED_KEY_MIC:
@@ -1142,7 +1136,7 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
             goto done;
         }
     } else {
-        log_debug("%s: SISIG signature generation %d", __func__, SHA_DIGEST_LENGTH);
+        log_debug("%s: SISIG signature generation ", __func__);
         struct SigData *sigdata = calloc(1, sizeof(sigdata));
         unsigned char *md = calloc(1, SHA256_DIGEST_LENGTH);
         struct ca_store *store = env->sc_priv;
@@ -1154,10 +1148,7 @@ ikev2_msg_authsign(struct iked *env, struct iked_sa *sa,
         print_hex(ibuf_data(pub_id->id_buf), 0, ibuf_size(pub_id->id_buf));
 
         sigdata = SISig_P751_Sign(md, key, ibuf_data(pub_id->id_buf));
-        log_debug("%s: got out of SISig_P751_Sign", __func__);
-        print_hex(sigdata->sig, 0, sigdata->siglen);
         buf = ibuf_new(sigdata->sig, sigdata->siglen);
-        print_hex(ibuf_data(buf), 0, ibuf_size(buf));
         log_debug("%s: end of SISIG generation", __func__);
     }
 

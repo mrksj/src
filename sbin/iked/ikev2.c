@@ -281,6 +281,8 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 	size_t			 len;
 	struct iked_id		*id = NULL;
 	int			 ignore = 0;
+    struct imsg_truncated *imsg_trunc;
+    int imsg_trunc_data_size;
 
 	switch (imsg->hdr.type) {
 	case IMSG_CERTREQ:
@@ -382,12 +384,63 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 		if (ikev2_ike_auth(env, sa) != 0)
 			log_debug("%s: failed to send ike auth", __func__);
 		break;
+    case IMSG_AUTH_TRUNC:
+		if ((sa = ikev2_getimsgdata(env, imsg,
+		    &sh, &type, &ptr, &len)) == NULL) {
+			log_debug("%s: invalid auth reply", __func__);
+			break;
+		}
+
+        log_info("%s: returned from ikev2_getimsgdata", __func__);
+
+        imsg_trunc = (struct imsg_truncated *)ptr;
+        imsg_trunc_data_size =
+            len - sizeof(imsg_trunc->curr_no) - sizeof(imsg_trunc->total);
+        log_info("%s: IMSG_AUTH_TRUNC: imsg %d/%d\n"
+                "imsg_trunc_data_size: %d",
+                __func__, imsg_trunc->curr_no, imsg_trunc->total,
+                imsg_trunc_data_size);
+
+        id = &sa->sa_localauth;
+
+        if (imsg_trunc->curr_no == 1){
+            id->id_type = type;
+            id->id_offset = 0;
+            ibuf_release(id->id_buf);
+            id->id_buf = NULL;
+
+            if ((id->id_buf = ibuf_dynamic(imsg_trunc_data_size,
+                            imsg_trunc->total * imsg_trunc_data_size)) == NULL)
+            {
+                log_debug("%s: could not ibuf_dynamic id->id_buf with len %d",
+                        __func__, imsg_trunc_data_size);    
+            }
+            log_info("%s: initialized id->id_buf with %d",
+                    __func__, imsg_trunc_data_size);
+        }
+
+        log_debug("%s: wpos before: %zu, size: %zu/%zu",
+               __func__, id->id_buf->wpos, id->id_buf->size, id->id_buf->max);
+        print_hex(ptr + 4, 0, imsg_trunc_data_size);
+        if(ibuf_add(id->id_buf, imsg_trunc, imsg_trunc_data_size) != 0){
+            log_debug("%s: failed to ibuf_add", __func__);
+        }
+        log_debug("%s: wpos after: %zu, size: %zu/%zu",
+                __func__, id->id_buf->wpos, id->id_buf->size, id->id_buf->max);
+
+        if (imsg_trunc->curr_no == imsg_trunc->total){
+            log_info("%s: finished reassembly, have length: %lu",
+                    __func__, ibuf_size(id->id_buf));    
+            goto auth_continue;
+        }
+        break;
 	case IMSG_AUTH:
 		if ((sa = ikev2_getimsgdata(env, imsg,
 		    &sh, &type, &ptr, &len)) == NULL) {
 			log_debug("%s: invalid auth reply", __func__);
 			break;
 		}
+
 		if (sa_stateok(sa, IKEV2_STATE_VALID)) {
 			log_warnx("%s: ignoring AUTH in state %s",
 			    SPI_SA(sa, __func__),
@@ -402,8 +455,8 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 		id->id_offset = 0;
 		ibuf_release(id->id_buf);
 		id->id_buf = NULL;
-
-		if (type != IKEV2_AUTH_NONE) {
+        
+        if (type != IKEV2_AUTH_NONE) {
 			if (len <= 0 ||
 			    (id->id_buf = ibuf_new(ptr, len)) == NULL) {
 				log_debug("%s: failed to get auth payload",
@@ -412,6 +465,7 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 			}
 		}
 
+auth_continue:
 		sa_stateflags(sa, IKED_REQ_AUTH);
 
 		if (ikev2_ike_auth(env, sa) != 0)
@@ -1388,7 +1442,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 	ssize_t				 len;
 
 	if (!sa_stateok(sa, IKEV2_STATE_SA_INIT))
-		return (0);
+        return 0;
 
 	if (!sa->sa_localauth.id_type) {
 		log_debug("%s: no local auth", __func__);

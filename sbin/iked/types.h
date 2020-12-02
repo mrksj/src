@@ -61,7 +61,7 @@
 
 #define IKED_ID_SIZE		1024	/* XXX should be dynamic */
 #define IKED_PSK_SIZE		1024	/* XXX should be dynamic */
-#define IKED_MSGBUF_MAX		8192
+#define IKED_MSGBUF_MAX		200000 /* XXX changed from 8192 */
 #define IKED_CFG_MAX		16	/* maximum CP attributes */
 #define IKED_TAG_SIZE		64
 #define IKED_CYCLE_BUFFERS	8	/* # of static buffers for mapping */
@@ -118,7 +118,8 @@ enum imsg_type {
 	IMSG_OCSP_CFG,
 	IMSG_AUTH,
 	IMSG_PRIVKEY,
-	IMSG_PUBKEY
+	IMSG_PUBKEY,
+    IMSG_AUTH_TRUNC
 };
 
 enum privsep_procid {

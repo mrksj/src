@@ -620,7 +620,7 @@ proc_composev_imsg(struct privsep *ps, enum privsep_procid id, int n,
 	for (; n < m; n++)
 		if (imsg_composev_event(&ps->ps_ievs[id][n],
 		    type, peerid, 0, fd, iov, iovcnt) == -1)
-			return (-1);
+            return (-1);
 
 	return (0);
 }
