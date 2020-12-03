@@ -376,10 +376,6 @@ ca_setauth(struct iked *env, struct iked_sa *sa,
 	int			 iovcnt = 3;
 	struct iked_policy	*policy = sa->sa_policy;
 	uint8_t			 type = policy->pol_auth.auth_method;
-    struct imsg_truncated *imsg_trunc = calloc(1, sizeof(struct imsg_truncated));
-    uint8_t *p;
-    int left;
-    int max_datalen;
 
 	if (id == PROC_CERT) {
 		/* switch encoding to IKEV2_AUTH_SIG if SHA2 is supported */
@@ -406,65 +402,17 @@ ca_setauth(struct iked *env, struct iked_sa *sa,
 	iov[0].iov_len = sizeof(sa->sa_hdr);
 	iov[1].iov_base = &type;
 	iov[1].iov_len = sizeof(type);
-	if (type == IKEV2_AUTH_NONE){
+	if (type == IKEV2_AUTH_NONE)
 		iovcnt--;
-
-	    if (proc_composev(&env->sc_ps, id, IMSG_AUTH, iov, iovcnt) == -1)
-            return (-1);
+    else{
+        iov[2].iov_base = ibuf_data(authmsg);
+        iov[2].iov_len = ibuf_size(authmsg);
+        log_debug("%s: auth length %zu", __func__, ibuf_size(authmsg));
     }
-	else if((ibuf_size(authmsg) + iov[0].iov_len + iov[1].iov_len +
-                IMSG_HEADER_SIZE) < MAX_IMSGSIZE) {
-		iov[2].iov_base = ibuf_data(authmsg);
-		iov[2].iov_len = ibuf_size(authmsg);
-		log_debug("%s: auth length %zu", __func__, ibuf_size(authmsg));
 
-	    if (proc_composev(&env->sc_ps, id, IMSG_AUTH, iov, iovcnt) == -1)
-            return (-1);
-    }
-    else {
-        // authmsg contains sisig signature being way too large to put in
-        // iov.iov_base
-        // call proc_composev more often 
-        max_datalen = MAX_IMSGSIZE -IMSG_HEADER_SIZE - iov[0].iov_len -
-            iov[1].iov_len - sizeof(imsg_trunc->curr_no) -
-            sizeof(imsg_trunc->total);
-        imsg_trunc->total =
-            ((ibuf_size(authmsg) + (max_datalen -1)) / max_datalen);
-        imsg_trunc->curr_no = 1;
-        p = ibuf_data(authmsg);
-
-        imsg_trunc->data = calloc(1, max_datalen);
-
-        log_debug("%s: max datalen: %d, total fragments: %d",
-                __func__, max_datalen, imsg_trunc->total);
-
-        for (left = ibuf_size(authmsg); left > 0; left-=max_datalen){
-            // in last call, do not copy max_datalen but just left bytes
-            if (left < max_datalen)
-                max_datalen = left;
-            log_debug("%s: %d/%d, copying %d bytes",
-                    __func__, imsg_trunc->curr_no, imsg_trunc->total,
-                    max_datalen);
-
-            memcpy(imsg_trunc->data, p, max_datalen);
-            iov[2].iov_base = (void *)imsg_trunc;
-            iov[2].iov_len = max_datalen + sizeof(imsg_trunc->curr_no) +
-                sizeof(imsg_trunc->total);
-
-                         
-	        if (proc_composev(&env->sc_ps, id, IMSG_AUTH_TRUNC, iov, iovcnt)
-                    == -1){
-                free(imsg_trunc->data);
-                free(imsg_trunc);
-                return (-1);
-            }
-            imsg_trunc->curr_no++;        
-            p += max_datalen;
-        }
-        free(imsg_trunc->data);
-        free(imsg_trunc);
-    }
-	return (0);
+    if (proc_composev(&env->sc_ps, id, IMSG_AUTH, iov, iovcnt) == -1)
+        return (-1);
+    return (0);
 }
 
 int

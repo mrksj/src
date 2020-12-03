@@ -63,6 +63,10 @@ int	 ikev2_dispatch_control(int, struct privsep_proc *, struct imsg *);
 struct iked_sa *
 	 ikev2_getimsgdata(struct iked *, struct imsg *, struct iked_sahdr *,
 	    uint8_t *, uint8_t **, size_t *);
+struct iked_sa *
+ikev2_getimsgdata_trunc(struct iked *env, struct imsg *imsg,
+        struct iked_sahdr *sh, uint8_t *type, uint8_t **buf, size_t *size,
+        uint16_t *round, uint16_t *total);
 
 void	 ikev2_recv(struct iked *, struct iked_message *);
 int	 ikev2_ike_auth_compatible(struct iked_sa *, uint8_t, uint8_t);
@@ -194,6 +198,8 @@ ikev2(struct privsep *ps, struct privsep_proc *p)
 {
 	return (proc_run(ps, p, procs, nitems(procs), ikev2_run, NULL));
 }
+/* "external" variable */
+uint8_t *raw_data;
 
 void
 ikev2_run(struct privsep *ps, struct privsep_proc *p, void *arg)
@@ -281,8 +287,7 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 	size_t			 len;
 	struct iked_id		*id = NULL;
 	int			 ignore = 0;
-    struct imsg_truncated *imsg_trunc;
-    int imsg_trunc_data_size;
+    uint16_t round, total;
 
 	switch (imsg->hdr.type) {
 	case IMSG_CERTREQ:
@@ -385,50 +390,41 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 			log_debug("%s: failed to send ike auth", __func__);
 		break;
     case IMSG_AUTH_TRUNC:
-		if ((sa = ikev2_getimsgdata(env, imsg,
-		    &sh, &type, &ptr, &len)) == NULL) {
-			log_debug("%s: invalid auth reply", __func__);
+		if ((sa = ikev2_getimsgdata_trunc(env, imsg,
+		    &sh, &type, &ptr, &len, &round, &total)) == NULL) {
+			log_debug("%s: invalid auth reply trunc", __func__);
 			break;
 		}
 
-        log_info("%s: returned from ikev2_getimsgdata", __func__);
-
-        imsg_trunc = (struct imsg_truncated *)ptr;
-        imsg_trunc_data_size =
-            len - sizeof(imsg_trunc->curr_no) - sizeof(imsg_trunc->total);
-        log_info("%s: IMSG_AUTH_TRUNC: imsg %d/%d\n"
-                "imsg_trunc_data_size: %d",
-                __func__, imsg_trunc->curr_no, imsg_trunc->total,
-                imsg_trunc_data_size);
+        log_info("%s: returned from ikev2_getimsgdata with len: %zu"
+                "in round %d of %d", __func__, len, round, total);
 
         id = &sa->sa_localauth;
 
-        if (imsg_trunc->curr_no == 1){
+        if (round == 1){
             id->id_type = type;
             id->id_offset = 0;
             ibuf_release(id->id_buf);
             id->id_buf = NULL;
 
-            if ((id->id_buf = ibuf_dynamic(imsg_trunc_data_size,
-                            imsg_trunc->total * imsg_trunc_data_size)) == NULL)
+            if ((id->id_buf = ibuf_dynamic(len, total * len))
+                    == NULL)
             {
-                log_debug("%s: could not ibuf_dynamic id->id_buf with len %d",
-                        __func__, imsg_trunc_data_size);    
+                log_debug("%s: could not ibuf_dynamic id->id_buf with len %zu"
+                        "and maxlen %zu", __func__, len, total*len);
             }
-            log_info("%s: initialized id->id_buf with %d",
-                    __func__, imsg_trunc_data_size);
+            log_info("%s: initialized id->id_buf with %zu",
+                    __func__, len);
         }
 
-        log_debug("%s: wpos before: %zu, size: %zu/%zu",
                __func__, id->id_buf->wpos, id->id_buf->size, id->id_buf->max);
-        print_hex(ptr + 4, 0, imsg_trunc_data_size);
-        if(ibuf_add(id->id_buf, imsg_trunc, imsg_trunc_data_size) != 0){
+        //print_hex(ptr, 0, len);
+        if(ibuf_add(id->id_buf, ptr, len) != 0){
             log_debug("%s: failed to ibuf_add", __func__);
         }
-        log_debug("%s: wpos after: %zu, size: %zu/%zu",
                 __func__, id->id_buf->wpos, id->id_buf->size, id->id_buf->max);
 
-        if (imsg_trunc->curr_no == imsg_trunc->total){
+        if (round == total){
             log_info("%s: finished reassembly, have length: %lu",
                     __func__, ibuf_size(id->id_buf));    
             goto auth_continue;
@@ -572,6 +568,57 @@ ikev2_getimsgdata(struct iked *env, struct imsg *imsg, struct iked_sahdr *sh,
 	ptr += sizeof(*type);
 
 	sa = sa_lookup(env, sh->sh_ispi, sh->sh_rspi, sh->sh_initiator);
+
+	log_debug("%s: imsg %d rspi %s ispi %s initiator %d sa %s"
+	    " type %d data length %zd",
+	    __func__, imsg->hdr.type,
+	    print_spi(sh->sh_rspi, 8),
+	    print_spi(sh->sh_ispi, 8),
+	    sh->sh_initiator,
+	    sa == NULL ? "invalid" : "valid", *type, len);
+
+	if (sa == NULL)
+		return (NULL);
+
+	*buf = ptr;
+	*size = len;
+
+	return (sa);
+}
+
+struct iked_sa *
+ikev2_getimsgdata_trunc(struct iked *env, struct imsg *imsg,
+        struct iked_sahdr *sh, uint8_t *type, uint8_t **buf, size_t *size,
+        uint16_t *round, uint16_t *total)
+{
+	uint8_t		*ptr;
+	size_t		 len;
+	struct iked_sa	*sa;
+    struct ibuf_truncated *ibuf_trunc;
+
+    ibuf_trunc = (struct ibuf_truncated *)imsg->data;
+    *round = ibuf_trunc->curr_no;
+    *total = ibuf_trunc->total;
+    log_debug("%s: %d/%d", __func__, *round, *total);
+
+    // do not look at the curr_no and total number in imsg_data
+	ptr = (uint8_t *)imsg->data + sizeof(ibuf_trunc->curr_no) + sizeof(ibuf_trunc->total);
+	len = IMSG_DATA_SIZE(imsg) - sizeof(ibuf_trunc->curr_no) -
+        sizeof(ibuf_trunc->total);
+    
+    if (len < sizeof(*sh))
+        fatalx("ikev2_getimsgdata: length too small for sh");
+    memcpy(sh, ptr, sizeof(*sh));
+    len -= sizeof(*sh);
+    ptr += sizeof(*sh);
+    if (len < sizeof(*type))
+        fatalx("ikev2_getimsgdata: length too small for type");
+    memcpy(type, ptr, sizeof(*type));
+    len -= sizeof(*type);
+    ptr += sizeof(*type);
+
+	sa = sa_lookup(env, sh->sh_ispi, sh->sh_rspi, sh->sh_initiator);
+    log_debug("%s: sa: %p", __func__, sa);
 
 	log_debug("%s: imsg %d rspi %s ispi %s initiator %d sa %s"
 	    " type %d data length %zd",

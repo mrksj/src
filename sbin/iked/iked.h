@@ -62,7 +62,7 @@ struct imsgev {
 };
 
 /* for sending big data in more than one imsg*/
-struct imsg_truncated {
+struct ibuf_truncated {
     uint16_t curr_no;
     uint16_t total;
     uint8_t *data;

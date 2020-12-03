@@ -42,6 +42,9 @@ void	 proc_shutdown(struct privsep_proc *);
 void	 proc_sig_handler(int, short, void *);
 void	 proc_range(struct privsep *, enum privsep_procid, int *, int *);
 int	 proc_dispatch_null(int, struct privsep_proc *, struct imsg *);
+int imsg_composev_bigevent(struct imsgev *iev, uint16_t type, uint32_t peerid,
+        pid_t pid, int fd, const struct iovec *iov, int iovcnt);
+int map_to_trunc(int type);
 
 int
 proc_ispeer(struct privsep_proc *procs, unsigned int nproc,
@@ -561,17 +564,114 @@ imsg_compose_event(struct imsgev *iev, uint16_t type, uint32_t peerid,
 	return (ret);
 }
 
+/* struct ibuf_truncated *ibuf_trunc
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| ibuf_trunc->curr_no           | ibuf_trunc->total             |
++-------------------------------+-------------------------------+
+| iov[0]_base                                                   |\
+~                                                               ~ | #iov[0].iov_len
+|                                                               |/   = 20bytes
++----------------+----------------------------------------------+
+| iov[1]_base    | iov[2]_base <-partly                         |\
++----------------+                                              | |
+|                                                               | | #iov2_space
+~                                                               ~ |  = 16343bytes
+|                                                               |/
++---------------------------------------------------------------+
+*/
+int
+imsg_composev_bigevent(struct imsgev *iev, uint16_t type, uint32_t peerid,
+        pid_t pid, int fd, const struct iovec *iov, int iovcnt)
+{
+    int left;
+    uint16_t max_imsg_data_len = MAX_IMSGSIZE - IMSG_HEADER_SIZE;
+    uint16_t iov2_space;
+    uint16_t ibuf_trunc_data_len;
+    uint8_t *p;
+    struct ibuf_truncated *ibuf_trunc =
+        calloc(1, sizeof(struct ibuf_truncated));
+	struct ibuf	*wbuf;
+
+    ibuf_trunc_data_len = max_imsg_data_len - sizeof(ibuf_trunc->curr_no) - sizeof(ibuf_trunc->total);
+    iov2_space = ibuf_trunc_data_len - iov[0].iov_len -
+        iov[1].iov_len;
+    log_debug("%s: max_imsg_data_len: %d\n"
+            "ibuf_trunc_data_len: %d\n, iov2_space: %d",
+            __func__, max_imsg_data_len, ibuf_trunc_data_len, iov2_space);
+
+    ibuf_trunc->data = calloc(1, ibuf_trunc_data_len);
+    ibuf_trunc->total = (iov[2].iov_len + iov2_space - 1) / iov2_space;
+    ibuf_trunc->curr_no = 1;
+
+    p = iov[2].iov_base;
+
+    for (left = iov[2].iov_len; left > 0; left -= iov2_space){
+        log_debug("%s: round %d/%d, left: %d",
+                __func__, ibuf_trunc->curr_no, ibuf_trunc->total, left);
+        if (left < iov2_space) iov2_space = left;
+        memcpy(ibuf_trunc->data, iov[0].iov_base, iov[0].iov_len);
+        memcpy(ibuf_trunc->data + iov[0].iov_len, iov[1].iov_base,
+                iov[1].iov_len);
+        memcpy(ibuf_trunc->data + iov[0].iov_len + iov[1].iov_len, p,
+                iov2_space);
+        //print_hex(ibuf_trunc->data, 0, ibuf_trunc_data_len);
+
+	    if ((wbuf = imsg_create(&iev->ibuf, type, peerid, pid,
+                        max_imsg_data_len)) == NULL)
+	    	return (-1);
+
+        if (imsg_add(wbuf, &ibuf_trunc->curr_no, sizeof(ibuf_trunc->curr_no)) == -1){
+            return (-1);
+        }
+
+        if (imsg_add(wbuf, &ibuf_trunc->total, sizeof(ibuf_trunc->total)) == -1){
+            return (-1);
+        }
+
+	    if (imsg_add(wbuf, ibuf_trunc->data, ibuf_trunc_data_len) == -1){
+            return (-1);
+        }
+
+	    wbuf->fd = fd;
+
+	    imsg_close(&iev->ibuf, wbuf);
+
+        imsg_event_add(iev);
+        
+        p += ibuf_trunc_data_len; 
+        ibuf_trunc->curr_no++;
+    }
+
+    free(ibuf_trunc->data);
+    free(ibuf_trunc);
+    return 0;
+}
+
 int
 imsg_composev_event(struct imsgev *iev, uint16_t type, uint32_t peerid,
     pid_t pid, int fd, const struct iovec *iov, int iovcnt)
 {
 	int	ret;
+    int i;
+    uint32_t datalen = 0;
+    
+    for(i = 0; i<iovcnt; i++)
+        datalen += iov[i].iov_len;
+    
+    if(datalen < MAX_IMSGSIZE - IMSG_HEADER_SIZE){
+        if ((ret = imsg_composev(&iev->ibuf, type, peerid,
+                        pid, fd, iov, iovcnt)) == -1)
+            return (ret);
+        imsg_event_add(iev);
+        return (ret);
+    }
+    else { 
+        ret = imsg_composev_bigevent(iev, map_to_trunc(type), peerid, pid,
+                fd, iov, iovcnt);
+        return (ret);
+    }
 
-	if ((ret = imsg_composev(&iev->ibuf, type, peerid,
-	    pid, fd, iov, iovcnt)) == -1)
-		return (ret);
-	imsg_event_add(iev);
-	return (ret);
 }
 
 void
@@ -656,4 +756,16 @@ proc_iev(struct privsep *ps, enum privsep_procid id, int n)
 
 	proc_range(ps, id, &n, &m);
 	return (&ps->ps_ievs[id][n]);
+}
+
+/* Add other IMSG that are too big for one transmission */
+int
+map_to_trunc(int type)
+{
+    switch (type){
+        case IMSG_AUTH:
+            return IMSG_AUTH_TRUNC;
+        default:
+            return -1;
+    }
 }
